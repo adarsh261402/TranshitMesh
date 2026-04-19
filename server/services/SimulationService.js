@@ -1,34 +1,40 @@
+// SimulationService — manages network simulation state
 class SimulationService {
   constructor(io) {
     this.io = io;
-    this.simulations = new Map(); // busId → { mode, startTime }
+    this.state = global.simulationState || {};
   }
 
-  setSimulation(busId, mode) {
-    this.simulations.set(busId, {
-      mode, // 'weak', 'offline', 'gps_gap'
-      startTime: Date.now()
-    });
-
-    // Notify clients about simulation state
-    this.io.emit('simulation:state', { busId, mode, active: true });
+  setMode(busId, mode) {
+    if (mode === 'normal') {
+      delete this.state[busId];
+    } else {
+      this.state[busId] = { mode, startedAt: new Date() };
+    }
+    this.io.emit('simulation:changed', { busId, mode, startedAt: this.state[busId]?.startedAt });
+    return this.state;
   }
 
-  clearSimulation(busId) {
-    this.simulations.delete(busId);
-    this.io.emit('simulation:state', { busId, mode: 'normal', active: false });
+  getMode(busId) {
+    return this.state[busId]?.mode || 'normal';
   }
 
-  getSimulationState(busId) {
-    return this.simulations.get(busId) || null;
+  getAll() {
+    return this.state;
   }
 
-  getAllSimulations() {
-    const result = {};
-    this.simulations.forEach((val, key) => {
-      result[key] = val;
-    });
-    return result;
+  shouldSuppress(busId) {
+    const sim = this.state[busId];
+    if (!sim) return false;
+    if (sim.mode === 'offline') return true;
+    if (sim.mode === 'gps_gap') {
+      return (Date.now() - new Date(sim.startedAt).getTime()) < 30000;
+    }
+    return false;
+  }
+
+  isWeak(busId) {
+    return this.state[busId]?.mode === 'weak';
   }
 }
 

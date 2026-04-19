@@ -1,183 +1,181 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import MapView from '../components/map/MapView';
-import StatusBar from '../components/ui/StatusBar';
-import ETACard from '../components/ui/ETACard';
-import ConfidenceBadge from '../components/ui/ConfidenceBadge';
-import ErrorBoundary from '../components/ui/ErrorBoundary';
 import useBusTracking from '../hooks/useBusTracking';
-import useNetworkStatus from '../hooks/useNetworkStatus';
-import useP2P from '../hooks/useP2P';
-import { useToast } from '../components/ui/Toast';
+import usePeerDiscovery from '../hooks/usePeerDiscovery';
+import MapView from '../components/map/MapView';
+import ETACard from '../components/ui/ETACard';
+import ErrorBoundary from '../components/ui/ErrorBoundary';
+import api from '../services/api';
 import journeyTracker from '../services/JourneyTracker';
 
 export default function StudentDashboard({ user, onLogout }) {
-  const { buses, connected } = useBusTracking();
-  const { status, mode } = useNetworkStatus();
-  const { p2pStatus } = useP2P(user?.id);
-  const { addToast } = useToast();
   const navigate = useNavigate();
+  const { buses, connected } = useBusTracking();
+  const { peers, registerAsPeer } = usePeerDiscovery();
   const [selectedBus, setSelectedBus] = useState(null);
-  const [showPanel, setShowPanel] = useState(false);
+  const [trackedBusId, setTrackedBusId] = useState(null);
   const [ongoingJourney, setOngoingJourney] = useState(null);
-  const [boardingModal, setBoardingModal] = useState(null); // {bus, stop}
 
-  // Check for ongoing journey on mount
+  useEffect(() => { registerAsPeer({ lat: 23.1817, lng: 79.9895 }); }, []);
+
   useEffect(() => {
-    journeyTracker.checkOngoing().then(j => setOngoingJourney(j));
-    const unsub = journeyTracker.subscribe(j => setOngoingJourney(j));
-    return unsub;
+    api.get('/api/journeys/ongoing').then(r => { if (r.data && r.data._id) setOngoingJourney(r.data); }).catch(() => {});
   }, []);
 
-  const handleBusSelect = useCallback((bus) => {
-    setSelectedBus(bus);
-    setShowPanel(true);
-  }, []);
+  // Group buses by route for multi-bus panel
+  const routeGroups = {};
+  buses.forEach(bus => {
+    if (!routeGroups[bus.route]) routeGroups[bus.route] = { label: bus.routeLabel, color: bus.routeColor, buses: [] };
+    routeGroups[bus.route].buses.push(bus);
+  });
 
-  const handleBoardBus = useCallback(async (bus, stop) => {
-    if (ongoingJourney) {
-      addToast('You already have an ongoing journey. End it first.', 'warning');
-      return;
-    }
-    // If no specific stop, show stop selection
-    if (!stop && bus.stops?.length > 0) {
-      setBoardingModal(bus);
-      return;
-    }
-    const boardingStop = stop || bus.stops?.[0] || { name: 'Unknown', lat: bus.lat, lng: bus.lng };
+  const handleBoardBus = async (bus, stop) => {
     try {
-      await journeyTracker.startJourney(bus, boardingStop);
-      addToast(`🎫 Boarded ${bus.name}! Enjoy your ride.`, 'success');
-      setBoardingModal(null);
+      const resp = await api.post('/api/journeys/start', {
+        busId: bus.busId, busName: bus.name, routeName: bus.route, routeLabel: bus.routeLabel,
+        boardingStop: stop ? { name: stop.stopName || stop.name, lat: stop.lat, lng: stop.lng } : { name: 'Current Location', lat: bus.lat, lng: bus.lng },
+      });
+      setOngoingJourney(resp.data);
+      setTrackedBusId(bus.busId);
+      window.dispatchEvent(new CustomEvent('tm-notification', { detail: { type: 'success', message: `🎫 Boarded ${bus.name}!` } }));
     } catch (err) {
-      addToast(typeof err === 'string' ? err : 'Failed to board', 'error');
+      window.dispatchEvent(new CustomEvent('tm-notification', { detail: { type: 'error', message: err.response?.data?.error || 'Failed to board' } }));
     }
-  }, [ongoingJourney, addToast]);
+  };
 
-  const handleEndJourney = useCallback(async (stop) => {
+  const handleEndJourney = async () => {
+    if (!ongoingJourney) return;
     try {
-      await journeyTracker.endJourney(stop || null);
-      addToast('✅ Journey completed! Check your history.', 'success');
-    } catch (err) {
-      addToast(typeof err === 'string' ? err : 'Failed to end journey', 'error');
-    }
-  }, [addToast]);
+      const bus = buses.find(b => b.busId === ongoingJourney.busId);
+      await api.patch(`/api/journeys/${ongoingJourney._id}/end`, {
+        dropOffStop: bus ? { name: 'Current Stop', lat: bus.lat, lng: bus.lng } : { name: 'Unknown', lat: 23.1817, lng: 79.9895 },
+      });
+      setOngoingJourney(null);
+      setTrackedBusId(null);
+      window.dispatchEvent(new CustomEvent('tm-notification', { detail: { type: 'success', message: '✅ Journey ended!' } }));
+    } catch { window.dispatchEvent(new CustomEvent('tm-notification', { detail: { type: 'error', message: 'Failed to end journey' } })); }
+  };
 
-  const activeBuses = buses.filter(b => b.isActive !== false);
+  const handleTrackBus = (busId) => {
+    setTrackedBusId(prev => prev === busId ? null : busId);
+    const bus = buses.find(b => b.busId === busId);
+    if (bus) setSelectedBus(bus);
+  };
 
-  // Find the ongoing journey bus data
-  const ongoingBus = ongoingJourney ? activeBuses.find(b => b.busId === ongoingJourney.busId) : null;
+  const networkLabel = connected ? '🟢 Strong Network' : '🔴 Reconnecting';
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Top Nav */}
-      <nav style={{ background: 'var(--bg-primary)', borderBottom: '2px solid var(--border)', padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 2px 8px rgba(245,197,24,0.12)', zIndex: 1000, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>TransitMesh 🚌</h1>
-        </div>
-        <StatusBar connectedPeers={p2pStatus.connectedPeers} connected={connected} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button onClick={() => navigate('/journeys')} className="btn btn-secondary btn-sm">📋 My Journeys</button>
-          <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{user?.name}</span>
-          <button onClick={onLogout} className="btn btn-secondary btn-sm">Logout</button>
-        </div>
-      </nav>
-
-      {/* Ongoing Journey Banner */}
-      {ongoingJourney && (
-        <div style={{ background: '#FFF3C4', borderBottom: '2px solid #F5C518', padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 999, flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 500 }}>
-            <span>🚌</span>
-            <span>Currently on <strong>{ongoingJourney.busName}</strong> — {ongoingJourney.routeLabel || ongoingJourney.routeName}</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>from {ongoingJourney.boardingStop?.name}</span>
+    <div style={{ display: 'flex', height: '100vh', width: '100%', overflow: 'hidden' }}>
+      {/* ═══════════ MAP ═══════════ */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        {/* Top bar */}
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 500, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: 'rgba(255,253,245,0.95)', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 800, margin: 0 }}>TransitMesh 🚌</h2>
+            <span style={{ fontSize: '12px', color: connected ? 'var(--success)' : 'var(--danger)' }}>{networkLabel} — Updating every {connected ? '3s' : '—'}</span>
+            {peers.length > 0 && <span style={{ fontSize: '12px', color: 'var(--accent-warm)' }}>👥 {peers.length} peers</span>}
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => handleEndJourney(null)}>🏁 End Journey</button>
-        </div>
-      )}
-
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-        {/* Map */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <ErrorBoundary fallbackTitle="Map temporarily unavailable" fallbackMessage="Showing last known data. Please try again.">
-            <MapView buses={activeBuses} selectedBus={selectedBus} onBusSelect={handleBusSelect} onBoardBus={handleBoardBus} />
-          </ErrorBoundary>
-
-          {/* P2P Banner */}
-          {p2pStatus.connectedPeers > 0 && (
-            <div style={{ position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', zIndex: 500, background: 'var(--warning-bg)', border: '1px solid var(--warning-border)', borderRadius: 'var(--radius-pill)', padding: '6px 16px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 500, color: 'var(--warning)', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-              <span>📡</span> P2P Active — 👥 {p2pStatus.connectedPeers} peers
-            </div>
-          )}
-
-          {/* Floating End Journey button */}
-          {ongoingJourney && ongoingBus && (
-            <div style={{ position: 'absolute', bottom: '24px', left: '50%', transform: 'translateX(-50%)', zIndex: 500 }}>
-              <button className="btn btn-primary" style={{ boxShadow: '0 4px 16px rgba(245,197,24,0.4)', fontSize: '14px', padding: '10px 24px' }}
-                onClick={() => {
-                  // Try to find the nearest stop to end at
-                  const bus = activeBuses.find(b => b.busId === ongoingJourney.busId);
-                  const nearestStop = bus?.stops?.reduce((best, s) => {
-                    const d = Math.abs(s.lat - bus.lat) + Math.abs(s.lng - bus.lng);
-                    return (!best || d < best.d) ? { ...s, d } : best;
-                  }, null);
-                  handleEndJourney(nearestStop || null);
-                }}>
-                🏁 End Journey at Nearest Stop
-              </button>
-            </div>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button onClick={() => navigate('/journeys')} className="btn btn-secondary btn-sm">📋 My Journeys</button>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{user?.name}</span>
+            <button onClick={onLogout} className="btn btn-secondary btn-sm">Logout</button>
+          </div>
         </div>
 
-        {/* Side Panel */}
-        <div style={{ width: showPanel ? '360px' : '300px', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', transition: 'width 0.2s ease' }} className="hide-mobile">
-          <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>🚌 Active Buses ({activeBuses.length})</h2>
-          {activeBuses.map(bus => (
-            <div key={bus.busId} onClick={() => handleBusSelect(bus)} className="card card-accent"
-              style={{ padding: '14px', cursor: 'pointer', background: selectedBus?.busId === bus.busId ? 'var(--bg-tertiary)' : 'var(--bg-secondary)', transition: 'all 0.15s ease' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <div>
-                  <div style={{ fontFamily: 'var(--font-display)', fontSize: '15px', fontWeight: 600 }}>{bus.name}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{bus.routeLabel || bus.route}</div>
+        {/* Ongoing journey banner */}
+        {ongoingJourney && (
+          <div style={{ position: 'absolute', top: '52px', left: '50%', transform: 'translateX(-50%)', zIndex: 500, background: '#FFF3C4', border: '2px solid #F5C518', borderRadius: '12px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '12px', boxShadow: '0 4px 16px rgba(245,197,24,0.3)' }}>
+            <span style={{ fontSize: '14px' }}>🎫</span>
+            <span style={{ fontSize: '13px', fontWeight: 600 }}>On board: {ongoingJourney.busName}</span>
+            <button onClick={handleEndJourney} className="btn btn-danger btn-sm" style={{ padding: '4px 12px', fontSize: '11px' }}>End Journey</button>
+          </div>
+        )}
+
+        {/* Tracking banner */}
+        {trackedBusId && !ongoingJourney && (
+          <div style={{ position: 'absolute', top: '52px', left: '50%', transform: 'translateX(-50%)', zIndex: 500, background: '#E8F5E9', border: '2px solid #A5D6A7', borderRadius: '12px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#2E7D32' }}>📍 Tracking: {buses.find(b => b.busId === trackedBusId)?.name || trackedBusId}</span>
+            <button onClick={() => setTrackedBusId(null)} className="btn btn-secondary btn-sm" style={{ padding: '4px 12px', fontSize: '11px' }}>Stop Tracking</button>
+          </div>
+        )}
+
+        <ErrorBoundary>
+          <MapView
+            buses={buses}
+            selectedBus={selectedBus}
+            onBusSelect={setSelectedBus}
+            onBoardBus={handleBoardBus}
+            trackedBusId={trackedBusId}
+          />
+        </ErrorBoundary>
+      </div>
+
+      {/* ═══════════ SIDE PANEL ═══════════ */}
+      <div style={{ width: '360px', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border)', overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '14px', fontWeight: 700, margin: '4px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          🚌 Active Buses ({buses.length})
+        </h3>
+
+        {Object.entries(routeGroups).map(([routeId, group]) => (
+          <div key={routeId} className="card" style={{ padding: '10px', borderLeft: `4px solid ${group.color}` }}>
+            {/* Route header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div>
+                <span style={{ fontFamily: 'var(--font-display)', fontSize: '13px', fontWeight: 700 }}>{group.label}</span>
+              </div>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                {group.buses.length > 1 ? `🔵 ${group.buses.length} buses` : ''}
+              </span>
+            </div>
+
+            {/* Individual buses in this route */}
+            {group.buses.map(bus => {
+              const source = bus.source || 'live';
+              const simMode = bus.simulatedMode || 'normal';
+              const sourceLabel = simMode === 'offline' ? '🔴 PREDICTED' : simMode === 'weak' ? '🟡 WEAK' : simMode === 'gps_gap' ? '⚠️ GPS GAP' : '🟢 LIVE';
+              const delayPill = bus.isDelayed
+                ? { text: `⚠️ ${bus.delayMinutes}m DELAYED`, bg: '#FFEBEE', color: '#C62828', border: '#EF9A9A' }
+                : { text: '🟢 ON TIME', bg: '#E8F5E9', color: '#2E7D32', border: '#A5D6A7' };
+
+              return (
+                <div key={bus.busId} style={{ padding: '8px', background: selectedBus?.busId === bus.busId ? 'var(--bg-tertiary)' : 'var(--bg-secondary)', borderRadius: '8px', marginBottom: '6px', cursor: 'pointer', transition: 'background 0.15s', border: trackedBusId === bus.busId ? '2px solid var(--accent-primary)' : '1px solid transparent' }}
+                  onClick={() => setSelectedBus(bus)}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontFamily: 'var(--font-display)', fontSize: '13px', fontWeight: 600 }}>{bus.name}</span>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>#{bus.busNumber}</span>
+                    </div>
+                    <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '12px', background: simMode === 'offline' ? '#FFEBEE' : simMode === 'weak' ? '#FFF3E0' : '#E8F5E9', color: simMode === 'offline' ? '#C62828' : simMode === 'weak' ? '#E65100' : '#2E7D32' }}>
+                      {sourceLabel}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span>Speed: <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{Math.round(bus.speed || 0)} km/h</strong></span>
+                    <span>Age: {bus.dataAge || 0}s</span>
+                  </div>
+
+                  {/* Delay status */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                    <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '12px', background: delayPill.bg, color: delayPill.color, border: `1px solid ${delayPill.border}`, fontWeight: 600 }}>
+                      {delayPill.text}
+                    </span>
+                    <button onClick={(e) => { e.stopPropagation(); handleTrackBus(bus.busId); }}
+                      className="btn btn-primary btn-sm" style={{ padding: '3px 10px', fontSize: '10px', background: trackedBusId === bus.busId ? 'var(--accent-hover)' : 'var(--accent-primary)' }}>
+                      {trackedBusId === bus.busId ? '📍 Tracking' : '🔍 Track'}
+                    </button>
+                  </div>
                 </div>
-                <ConfidenceBadge source={bus.source || 'live'} dataAge={bus.dataAge} />
-              </div>
-              <div style={{ display: 'flex', gap: '16px', fontSize: '12px' }}>
-                <div><span style={{ color: 'var(--text-muted)' }}>Speed: </span><span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{Math.round(bus.speed || 0)} km/h</span></div>
-                {bus.dataAge > 0 && <div><span style={{ color: 'var(--text-muted)' }}>Age: </span><span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: bus.dataAge > 30 ? 'var(--danger)' : 'var(--text-primary)' }}>{bus.dataAge}s</span></div>}
-              </div>
-            </div>
-          ))}
-          {selectedBus && <ETACard busId={selectedBus.busId} stops={selectedBus.stops} source={selectedBus.source} />}
-        </div>
-      </div>
-
-      {/* Boarding Stop Selection Modal */}
-      {boardingModal && (
-        <div className="modal-overlay" onClick={() => setBoardingModal(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxHeight: '70vh', overflow: 'auto' }}>
-            <h3 style={{ marginBottom: '12px' }}>🎫 Select Boarding Stop</h3>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '16px' }}>Where are you boarding <strong>{boardingModal.name}</strong>?</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {boardingModal.stops?.sort((a, b) => a.order - b.order).map((stop, i) => (
-                <button key={i} className="btn btn-secondary" style={{ textAlign: 'left', justifyContent: 'flex-start' }}
-                  onClick={() => handleBoardBus(boardingModal, stop)}>
-                  #{stop.order + 1} {stop.name}
-                </button>
-              ))}
-            </div>
-            <button className="btn btn-secondary" style={{ width: '100%', marginTop: '12px' }} onClick={() => setBoardingModal(null)}>Cancel</button>
+              );
+            })}
           </div>
-        </div>
-      )}
+        ))}
 
-      {/* Mobile Nav */}
-      <div className="mobile-nav" style={{ display: 'none' }}>
-        <button className="mobile-nav-item active"><span>🗺️</span> Map</button>
-        <button className="mobile-nav-item" onClick={() => navigate('/journeys')}><span>📋</span> Journeys</button>
-        <button className="mobile-nav-item"><span>🔔</span> Alerts</button>
-        <button className="mobile-nav-item"><span>👤</span> Profile</button>
+        {/* Selected bus ETA */}
+        {selectedBus && (
+          <ETACard busId={selectedBus.busId} source={selectedBus.source} />
+        )}
       </div>
-      <style>{`@media (max-width: 768px) { .hide-mobile { display: none !important; } .mobile-nav { display: flex !important; } }`}</style>
     </div>
   );
 }

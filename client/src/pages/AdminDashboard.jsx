@@ -52,27 +52,69 @@ function BusTable({ buses, onEdit, onDelete, onSimulate }) {
 }
 
 function SimPanel({ buses, onSimulate }) {
-  const [selectedBus, setSelectedBus] = useState('');
-  const doSim = (mode) => { if (selectedBus) onSimulate(selectedBus, mode); };
+  const [simStates, setSimStates] = useState({});
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    fetch(`${API}/admin/simulate`, { headers: headers() }).then(r => r.json()).then(setSimStates).catch(() => {});
+    const iv = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const doSim = async (busId, mode) => {
+    // Optimistic update
+    if (mode === 'normal') {
+      setSimStates(prev => { const n = { ...prev }; delete n[busId]; return n; });
+    } else {
+      setSimStates(prev => ({ ...prev, [busId]: { mode, startedAt: new Date().toISOString() } }));
+    }
+    onSimulate(busId, mode);
+  };
+
+  const formatDuration = (startedAt) => {
+    if (!startedAt) return '';
+    const sec = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return `${m}m ${s}s ago`;
+  };
+
+  const modeColors = { offline: { bg: '#FFEBEE', text: '#C62828', label: '🔴 OFFLINE' }, weak: { bg: '#FFF3E0', text: '#E65100', label: '🟡 WEAK' }, gps_gap: { bg: '#FFF8E1', text: '#FF6F00', label: '⚠️ GPS GAP' } };
+  const normalPill = { bg: '#E8F5E9', text: '#2E7D32', label: '🟢 NORMAL' };
+
   return (
-    <div className="card" style={{ padding: '20px' }}>
-      <h3 style={{ fontSize: '16px', marginBottom: '16px' }}>🎮 Network Simulation (Demo Tool)</h3>
-      <div style={{ marginBottom: '12px' }}>
-        <label className="input-label">Select Bus</label>
-        <select className="input-field" value={selectedBus} onChange={e => setSelectedBus(e.target.value)}>
-          <option value="">Choose a bus...</option>
-          {buses.map(b => <option key={b.busId} value={b.busId}>{b.name} ({b.busId})</option>)}
-        </select>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-        <button className="btn btn-secondary" onClick={() => doSim('weak')} disabled={!selectedBus}>🟡 Simulate Weak Network</button>
-        <button className="btn btn-danger" onClick={() => doSim('offline')} disabled={!selectedBus}>🔴 Simulate Offline</button>
-        <button className="btn btn-secondary" onClick={() => doSim('gps_gap')} disabled={!selectedBus}>⚠️ Simulate GPS Gap</button>
-        <button className="btn btn-primary" onClick={() => doSim('normal')} disabled={!selectedBus}>🟢 Restore Normal</button>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <h3 style={{ fontSize: '16px', marginBottom: '4px' }}>🧪 Network Simulation Panel</h3>
+      {buses.map(bus => {
+        const sim = simStates[bus.busId];
+        const currentMode = sim?.mode || 'normal';
+        const pill = sim ? modeColors[sim.mode] || normalPill : normalPill;
+        return (
+          <div key={bus.busId} className="card" style={{ padding: '14px', borderLeft: `4px solid ${pill.text}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div>
+                <span style={{ fontFamily: 'var(--font-display)', fontSize: '14px', fontWeight: 600 }}>{bus.name}</span>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px', fontFamily: 'var(--font-mono)' }}>#{bus.busNumber || bus.busId}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, padding: '3px 10px', borderRadius: '12px', background: pill.bg, color: pill.text }}>{pill.label}</span>
+                {sim && <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>since {formatDuration(sim.startedAt)}</span>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => doSim(bus.busId, 'weak')} disabled={currentMode === 'weak'} style={{ opacity: currentMode === 'weak' ? 0.5 : 1 }}>🟡 Weak Network</button>
+              <button className="btn btn-danger btn-sm" onClick={() => doSim(bus.busId, 'offline')} disabled={currentMode === 'offline'} style={{ opacity: currentMode === 'offline' ? 0.5 : 1 }}>🔴 Simulate Offline</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => doSim(bus.busId, 'gps_gap')} disabled={currentMode === 'gps_gap'} style={{ opacity: currentMode === 'gps_gap' ? 0.5 : 1 }}>⚠️ GPS Gap</button>
+              {currentMode !== 'normal' && (
+                <button className="btn btn-primary btn-sm" onClick={() => doSim(bus.busId, 'normal')} style={{ background: 'var(--accent-primary)', fontWeight: 700 }}>🟢 Restore ✓</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
+
 
 function AnalyticsView({ data }) {
   if (!data) return <div className="spinner" style={{ margin: '40px auto' }} />;
