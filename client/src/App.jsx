@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import StudentDashboard from './pages/StudentDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import Journeys from './pages/Journeys';
 import { ToastProvider } from './components/ui/Toast';
 import './index.css';
 
@@ -52,6 +53,7 @@ function App() {
           <Route path="/login" element={user ? <Navigate to={user.role === 'admin' ? '/admin' : '/dashboard'} /> : <Login onLogin={handleLogin} />} />
           <Route path="/register" element={user ? <Navigate to="/dashboard" /> : <Register onLogin={handleLogin} />} />
           <Route path="/dashboard" element={user && user.role !== 'admin' ? <StudentDashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} />
+          <Route path="/journeys" element={user && user.role !== 'admin' ? <Journeys user={user} /> : <Navigate to="/login" />} />
           <Route path="/admin/*" element={user && user.role === 'admin' ? <AdminDashboard user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} />
           <Route path="*" element={<Navigate to={user ? (user.role === 'admin' ? '/admin' : '/dashboard') : '/login'} />} />
         </Routes>

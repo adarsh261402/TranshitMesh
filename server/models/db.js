@@ -9,6 +9,7 @@ const db = {
   positions: Datastore.create({ filename: path.join(dbDir, 'positions.db'), autoload: true }),
   arrivals: Datastore.create({ filename: path.join(dbDir, 'arrivals.db'), autoload: true }),
   peers: Datastore.create({ filename: path.join(dbDir, 'peers.db'), autoload: true }),
+  journeys: Datastore.create({ filename: path.join(dbDir, 'journeys.db'), autoload: true }),
 };
 
 // Ensure indexes
@@ -17,5 +18,7 @@ db.buses.ensureIndex({ fieldName: 'busId', unique: true });
 db.positions.ensureIndex({ fieldName: 'busId' });
 db.arrivals.ensureIndex({ fieldName: 'busId' });
 db.peers.ensureIndex({ fieldName: 'peerId', unique: true });
+db.journeys.ensureIndex({ fieldName: 'userId' });
+db.journeys.ensureIndex({ fieldName: 'busId' });
 
 module.exports = db;

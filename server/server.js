@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const morgan = require('morgan');
+const compression = require('compression');
 const { Server: SocketServer } = require('socket.io');
 const cron = require('node-cron');
 const path = require('path');
@@ -21,6 +22,7 @@ const peerRoutes = require('./routes/peers');
 const syncRoutes = require('./routes/sync');
 const validateRoutes = require('./routes/validate');
 const adminRoutes = require('./routes/admin');
+const journeyRoutes = require('./routes/journeys');
 const setupSocket = require('./socket/index');
 const SimulationService = require('./services/SimulationService');
 
@@ -31,6 +33,7 @@ const io = new SocketServer(server, {
   cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'], credentials: true }
 });
 
+app.use(compression());
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
@@ -44,6 +47,7 @@ app.use('/api/peers', peerRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/validate', validateRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/journeys', journeyRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -100,7 +104,7 @@ function startBusSimulation() {
 
         await db.positions.insert({ busId: bus.busId, lat, lng, speed, heading, timestamp: new Date().toISOString(), source: 'gps' });
 
-        io.emit('bus:update', { busId: bus.busId, name: bus.name, route: bus.route, lat, lng, speed, heading, timestamp: new Date().toISOString(), isActive: true });
+        io.emit('bus:update', { busId: bus.busId, name: bus.name, route: bus.route, routeLabel: bus.routeLabel, routePolyline: bus.routePolyline, stops: bus.stops, lat, lng, speed, heading, timestamp: new Date().toISOString(), isActive: true });
       }
 
       const activeBuses = await db.buses.count({ isActive: true });

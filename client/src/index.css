@@ -428,3 +428,55 @@ tbody tr:hover { background: var(--bg-tertiary); }
   }
   .mobile-nav-item span { font-size: 20px; }
 }
+
+/* ============ Predicted Mode Marker ============ */
+.bus-marker-icon div {
+  transition: all 0.3s ease;
+}
+
+@keyframes pulse-dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+.pulse-dots::after {
+  content: '';
+  animation: pulse-dots 1.5s infinite;
+}
+
+/* ============ Skeleton Shimmer ============ */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--bg-tertiary) 50%, var(--bg-secondary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ============ Input Validation ============ */
+.input-error {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 3px rgba(198, 40, 40, 0.15) !important;
+}
+.error-text {
+  font-size: 12px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+/* ============ Journey Timeline ============ */
+.journey-timeline {
+  position: relative;
+}
+.journey-timeline::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-left: 2px dashed var(--border);
+}
